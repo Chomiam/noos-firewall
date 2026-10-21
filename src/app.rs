@@ -126,15 +126,10 @@ pub fn build_main_window(app: &adw::Application) -> adw::ApplicationWindow {
     {
         let sv = status_view.clone();
         let rv = rules_view.clone();
-        ufw::fetch_status_async(false, move |res| {
+        ufw::fetch_status_async(true, move |res| {
             if let Ok(initial_status) = res {
-                let is_active = initial_status.active && initial_status.ufw_installed;
                 sv.apply_status(&initial_status);
                 rv.apply_status(&initial_status);
-
-                if is_active {
-                    rv.reload_rules_from_ufw();
-                }
             }
         });
 

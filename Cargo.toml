@@ -1,6 +1,6 @@
 [package]
 name = "noos-firewall"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Chomiam <axel.valens@ik.me>"]
 description = "Gestion graphique native et moderne du pare-feu UFW sur Arch Linux"

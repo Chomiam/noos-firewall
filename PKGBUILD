@@ -1,6 +1,6 @@
 # Maintainer: Chomiam <axel.valens@ik.me>
 pkgname=noos-firewall
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Gestion graphique native et moderne du pare-feu UFW en Rust (GTK4 / Libadwaita)"
 arch=('x86_64' 'aarch64')

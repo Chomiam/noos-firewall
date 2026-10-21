@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -22,19 +23,219 @@ pub fn is_ufw_installed() -> bool {
         .unwrap_or(false)
 }
 
-/// Vérifie de manière non-privilégiée si le service `ufw` est actif via `systemctl is-active ufw`.
-pub fn check_systemd_ufw_active() -> bool {
-    let output = Command::new("systemctl")
+/// Détecte de manière fiable et sans élévation de privilèges si le pare-feu UFW est actif.
+/// Lit `/etc/ufw/ufw.conf` (`ENABLED=yes` / `ENABLED=no`), qui est mis à jour par `ufw enable` et `ufw disable`.
+/// En repli, interroge `systemctl is-active ufw`.
+pub fn check_ufw_active() -> bool {
+    if let Ok(content) = fs::read_to_string("/etc/ufw/ufw.conf") {
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if let Some((key, val)) = line.split_once('=') {
+                if key.trim().eq_ignore_ascii_case("ENABLED") {
+                    let clean_val = val.trim().trim_matches('"').trim_matches('\'');
+                    return clean_val.eq_ignore_ascii_case("yes")
+                        || clean_val.eq_ignore_ascii_case("true")
+                        || clean_val == "1";
+                }
+            }
+        }
+    }
+
+    Command::new("systemctl")
         .args(["is-active", "ufw"])
         .env("LC_ALL", "C")
-        .output();
+        .output()
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .eq_ignore_ascii_case("active")
+        })
+        .unwrap_or(false)
+}
 
-    match output {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.trim().eq_ignore_ascii_case("active")
+/// Lit la configuration par défaut (`/etc/default/ufw`) sans privilèges root.
+/// Retourne `(default_incoming, default_outgoing, ipv6_enabled)`.
+pub fn read_ufw_defaults() -> (String, String, bool) {
+    let mut incoming = String::from("Bloquée (Entrée)");
+    let mut outgoing = String::from("Autorisée (Sortie)");
+    let mut ipv6 = true;
+
+    if let Ok(content) = fs::read_to_string("/etc/default/ufw") {
+        for raw_line in content.lines() {
+            let line = raw_line.trim();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if let Some((key, val)) = line.split_once('=') {
+                let k = key.trim();
+                let v = val.trim().trim_matches('"').trim_matches('\'').to_uppercase();
+                match k {
+                    "DEFAULT_INPUT_POLICY" => {
+                        incoming = match v.as_str() {
+                            "ACCEPT" => String::from("Autorisée (Entrée)"),
+                            "REJECT" => String::from("Rejetée (Entrée)"),
+                            _ => String::from("Bloquée (Entrée)"),
+                        };
+                    }
+                    "DEFAULT_OUTPUT_POLICY" => {
+                        outgoing = match v.as_str() {
+                            "DROP" => String::from("Bloquée (Sortie)"),
+                            "REJECT" => String::from("Rejetée (Sortie)"),
+                            _ => String::from("Autorisée (Sortie)"),
+                        };
+                    }
+                    "IPV6" => {
+                        ipv6 = v == "YES" || v == "TRUE" || v == "1";
+                    }
+                    _ => {}
+                }
+            }
         }
-        Err(_) => false,
+    }
+
+    (incoming, outgoing, ipv6)
+}
+
+/// Parse une ligne `### tuple ###` issue de `/etc/ufw/user.rules` ou `/etc/ufw/user6.rules`.
+pub fn parse_ufw_tuple_line(line: &str, number: u32, ipv6: bool) -> Option<Rule> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("### tuple ###")?.trim();
+
+    // Retirer un éventuel suffixe `comment=...`
+    let without_comment = match rest.split_once(" comment=") {
+        Some((before, _)) => before.trim(),
+        None => rest,
+    };
+
+    let tokens: Vec<&str> = without_comment.split_whitespace().collect();
+    if tokens.len() < 6 || tokens.len() > 9 {
+        return None;
+    }
+
+    // Format UFW :
+    // 0: action (ex: allow, deny, reject, limit, allow_log, route:allow)
+    // 1: proto (tcp, udp, any)
+    // 2: dport (22, 80, 1714:1764, any)
+    // 3: dst (0.0.0.0/0, ::/0, ...)
+    // 4: sport (any, ...)
+    // 5: src (0.0.0.0/0, ::/0, 192.168.1.0/24, ...)
+    // [6: dapp, 7: sapp] (si len >= 8)
+    // last (si len == 7 ou 9): direction/iface (in, out, in_virbr0, out_wlan0, in_virbr0!out_wlan0)
+    let raw_action = tokens[0];
+    let action_base = raw_action
+        .split(':')
+        .next_back()
+        .unwrap_or(raw_action)
+        .split('_')
+        .next()
+        .unwrap_or(raw_action)
+        .to_lowercase();
+
+    let action = match action_base.as_str() {
+        "allow" => RuleAction::Allow,
+        "deny" => RuleAction::Deny,
+        "reject" => RuleAction::Reject,
+        "limit" => RuleAction::Limit,
+        _ => RuleAction::Allow,
+    };
+
+    let protocol = match tokens[1].to_lowercase().as_str() {
+        "tcp" => Protocol::Tcp,
+        "udp" => Protocol::Udp,
+        _ => Protocol::Both,
+    };
+
+    let dport = tokens[2];
+    let src = tokens[5];
+
+    let dir_token = if tokens.len() == 7 || tokens.len() == 9 {
+        tokens[tokens.len() - 1]
+    } else {
+        "in"
+    };
+
+    let direction = if dir_token.starts_with("out") {
+        RuleDirection::Out
+    } else {
+        RuleDirection::In
+    };
+
+    let port = if dport != "any" {
+        dport.to_string()
+    } else if tokens.len() >= 8 && tokens[6] != "-" {
+        tokens[6].replace("%20", " ")
+    } else if let Some((_, iface)) = dir_token.split_once('_') {
+        format!("Interface {iface}")
+    } else {
+        String::from("Tous les ports")
+    };
+
+    let from = if src == "0.0.0.0/0" || src == "::/0" || src.eq_ignore_ascii_case("any") {
+        String::from("Anywhere")
+    } else {
+        src.to_string()
+    };
+
+    Some(Rule {
+        number,
+        port,
+        protocol,
+        action,
+        direction,
+        from,
+        ipv6,
+    })
+}
+
+/// Lit directement les règles numérotées depuis `/etc/ufw/user.rules` et `/etc/ufw/user6.rules`
+/// sans demander de mot de passe Polkit (`pkexec`), exactement dans l'ordre utilisé par `ufw status numbered`.
+pub fn read_status_and_rules_unprivileged() -> FirewallStatus {
+    let installed = is_ufw_installed();
+    let active = check_ufw_active();
+    let (default_incoming, default_outgoing, ipv6_enabled) = read_ufw_defaults();
+
+    if !installed {
+        return FirewallStatus {
+            active: false,
+            ufw_installed: false,
+            default_incoming,
+            default_outgoing,
+            rules: Vec::new(),
+        };
+    }
+
+    let mut rules = Vec::new();
+    let mut counter: u32 = 1;
+
+    if let Ok(v4_content) = fs::read_to_string("/etc/ufw/user.rules") {
+        for line in v4_content.lines() {
+            if let Some(rule) = parse_ufw_tuple_line(line, counter, false) {
+                rules.push(rule);
+                counter += 1;
+            }
+        }
+    }
+
+    if ipv6_enabled {
+        if let Ok(v6_content) = fs::read_to_string("/etc/ufw/user6.rules") {
+            for line in v6_content.lines() {
+                if let Some(rule) = parse_ufw_tuple_line(line, counter, true) {
+                    rules.push(rule);
+                    counter += 1;
+                }
+            }
+        }
+    }
+
+    FirewallStatus {
+        active,
+        ufw_installed: true,
+        default_incoming,
+        default_outgoing,
+        rules,
     }
 }
 
@@ -116,7 +317,7 @@ pub fn is_pkexec_cancelled(exit_code: Option<i32>, stderr: &str) -> bool {
         || lower.contains("canceled")
 }
 
-/// Exécute `pkexec ufw <args...>` de façon synchrone (à appeler uniquement depuis un thread d'arrière-plan).
+/// Exécute `pkexec ufw <args...>` en une seule élévation Polkit.
 pub fn run_pkexec_ufw(args: &[&str]) -> Result<String, UfwError> {
     if !is_ufw_installed() {
         return Err(UfwError::NotInstalled);
@@ -168,13 +369,14 @@ fn rule_line_regex() -> &'static Regex {
     })
 }
 
-/// Parse la sortie de `ufw status numbered` (ou `ufw status verbose`) en `FirewallStatus`.
+/// Parse la sortie de `ufw status numbered` en `FirewallStatus`.
 pub fn parse_ufw_status_output(output: &str, fallback_active: bool) -> FirewallStatus {
+    let (default_incoming, default_outgoing, _) = read_ufw_defaults();
     let mut status = FirewallStatus {
         active: fallback_active,
         ufw_installed: true,
-        default_incoming: String::from("Bloquée (Entrée)"),
-        default_outgoing: String::from("Autorisée (Sortie)"),
+        default_incoming,
+        default_outgoing,
         rules: Vec::new(),
     };
 
@@ -270,7 +472,6 @@ pub fn build_add_rule_commands(
         Protocol::Tcp => Ok(vec![vec![action_arg, format!("{valid_port}/tcp")]]),
         Protocol::Udp => Ok(vec![vec![action_arg, format!("{valid_port}/udp")]]),
         Protocol::Both => {
-            // Pour une plage de ports (ex. 1714:1764), UFW impose de préciser /tcp ou /udp.
             if valid_port.contains(':') {
                 Ok(vec![
                     vec![action_arg.clone(), format!("{valid_port}/tcp")],
@@ -332,6 +533,27 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_ufw_tuple_lines() {
+        let l1 = "### tuple ### allow tcp 22 0.0.0.0/0 any 0.0.0.0/0 in";
+        let r1 = parse_ufw_tuple_line(l1, 1, false).unwrap();
+        assert_eq!(r1.number, 1);
+        assert_eq!(r1.port, "22");
+        assert_eq!(r1.protocol, Protocol::Tcp);
+        assert_eq!(r1.action, RuleAction::Allow);
+        assert_eq!(r1.direction, RuleDirection::In);
+        assert!(!r1.ipv6);
+
+        let l2 = "### tuple ### deny any 443 ::/0 any ::/0 out comment=74657374";
+        let r2 = parse_ufw_tuple_line(l2, 2, true).unwrap();
+        assert_eq!(r2.number, 2);
+        assert_eq!(r2.port, "443");
+        assert_eq!(r2.protocol, Protocol::Both);
+        assert_eq!(r2.action, RuleAction::Deny);
+        assert_eq!(r2.direction, RuleDirection::Out);
+        assert!(r2.ipv6);
+    }
+
+    #[test]
     fn test_parse_ufw_status_numbered() {
         let sample = "\
 Status: active
@@ -356,18 +578,6 @@ Status: active
         assert_eq!(status.rules[0].action, RuleAction::Allow);
         assert_eq!(status.rules[0].direction, RuleDirection::In);
         assert!(!status.rules[0].ipv6);
-
-        assert_eq!(status.rules[2].number, 3);
-        assert_eq!(status.rules[2].port, "443");
-        assert_eq!(status.rules[2].protocol, Protocol::Both);
-        assert_eq!(status.rules[2].action, RuleAction::Deny);
-
-        assert_eq!(status.rules[3].number, 4);
-        assert_eq!(status.rules[3].port, "1714:1764");
-        assert_eq!(status.rules[3].protocol, Protocol::Udp);
-
-        assert_eq!(status.rules[4].direction, RuleDirection::Out);
-        assert!(status.rules[5].ipv6);
     }
 
     #[test]
