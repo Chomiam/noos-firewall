@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Pare-feu
+Name[fr]=Pare-feu
+GenericName=Pare-feu UFW
+GenericName[fr]=Pare-feu UFW
+Comment=Gestion graphique native et moderne du pare-feu UFW sur Arch Linux
+Comment[fr]=Gestion graphique native et moderne du pare-feu UFW sur Arch Linux
+Exec=noos-firewall
+Icon=org.noos.Firewall
+Terminal=false
+Categories=System;Security;Network;GTK;GNOME;
+Keywords=firewall;ufw;pare-feu;securite;reseau;ports;noos;
+StartupNotify=true
+StartupWMClass=org.noos.Firewall

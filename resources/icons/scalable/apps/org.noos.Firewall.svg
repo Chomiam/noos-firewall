@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a5fb4"/>
+      <stop offset="55%" stop-color="#3584e4"/>
+      <stop offset="100%" stop-color="#62a0ea"/>
+    </linearGradient>
+    <linearGradient id="shieldLeft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#d2e3fc"/>
+    </linearGradient>
+    <linearGradient id="shieldRight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e8f0fe"/>
+      <stop offset="100%" stop-color="#8ab4f8"/>
+    </linearGradient>
+    <linearGradient id="badgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#33d17a"/>
+      <stop offset="100%" stop-color="#26a269"/>
+    </linearGradient>
+  </defs>
+  <!-- Ombre de fond -->
+  <rect x="10" y="13" width="108" height="108" rx="26" fill="#0d3260" fill-opacity="0.35"/>
+  <!-- Fond squircle principal -->
+  <rect x="10" y="10" width="108" height="108" rx="26" fill="url(#bgGrad)"/>
+  <rect x="11" y="11" width="106" height="106" rx="25" fill="none" stroke="#ffffff" stroke-opacity="0.22" stroke-width="2"/>
+
+  <!-- Bouclier central bicolore -->
+  <path d="M64 22 L30 36 L30 62 C30 84 44.5 98.5 64 106 Z" fill="url(#shieldLeft)"/>
+  <path d="M64 22 L98 36 L98 62 C98 84 83.5 98.5 64 106 Z" fill="url(#shieldRight)"/>
+  <path d="M64 22 L30 36 L30 62 C30 84 44.5 98.5 64 106 C83.5 98.5 98 84 98 62 L98 36 Z"
+        fill="none" stroke="#ffffff" stroke-width="2" stroke-opacity="0.75" stroke-linejoin="round"/>
+
+  <!-- Motif cadenas / protection interne -->
+  <rect x="52" y="58" width="24" height="19" rx="4" fill="#1a5fb4" fill-opacity="0.88"/>
+  <path d="M56 58 L56 51 C56 46.5 59.5 43 64 43 C68.5 43 72 46.5 72 51 L72 58"
+        fill="none" stroke="#1a5fb4" stroke-width="4" stroke-linecap="round" stroke-opacity="0.88"/>
+  <circle cx="64" cy="66" r="2.6" fill="#ffffff"/>
+  <path d="M64 68 L64 73" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>
+
+  <!-- Pastille de statut actif -->
+  <circle cx="93" cy="91" r="21" fill="#0d3260" fill-opacity="0.32"/>
+  <circle cx="92" cy="89" r="20" fill="url(#badgeGrad)" stroke="#ffffff" stroke-width="2.5"/>
+  <path d="M83 89 L89.5 95.5 L101 83.5" stroke="#ffffff" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
